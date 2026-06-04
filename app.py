@@ -141,6 +141,8 @@ if "model" not in st.session_state:
     st.session_state.model = "huggingface"
 if "hf_token" not in st.session_state:
     st.session_state.hf_token = ""
+if "gemini_key" not in st.session_state:
+    st.session_state.gemini_key = ""
 if "prompt" not in st.session_state:
     st.session_state.prompt = ""
 if "generated_img" not in st.session_state:
@@ -172,16 +174,20 @@ with st.container(border=True):
             st.session_state.model = "gemini"
             st.rerun()
     with col3:
-        if st.session_state.model == "huggingface":
-            if st.button("⚙️", help="設定 Hugging Face Token"):
-                st.session_state.show_settings = not st.session_state.show_settings
-                st.rerun()
+        if st.button("⚙️", help="設定 API Key"):
+            st.session_state.show_settings = not st.session_state.show_settings
+            st.rerun()
 
-    if st.session_state.model == "huggingface" and st.session_state.show_settings:
+    if st.session_state.show_settings:
         with st.container(border=True):
-            st.markdown("**Hugging Face Access Token (選填)**")
-            st.session_state.hf_token = st.text_input("hf_...", value=st.session_state.hf_token, type="password", label_visibility="collapsed")
-            st.caption("某些大型模型或高頻率請求需要提供 Token。您可以在 Hugging Face 帳號設定中產生。")
+            if st.session_state.model == "huggingface":
+                st.markdown("**Hugging Face Access Token (選填)**")
+                st.session_state.hf_token = st.text_input("hf_...", value=st.session_state.hf_token, type="password", label_visibility="collapsed", placeholder="hf_...")
+                st.caption("某些大型模型或高頻率請求需要提供 Token。您可以在 Hugging Face 帳號設定中產生。")
+            else:
+                st.markdown("**Gemini API Key (必填)**")
+                st.session_state.gemini_key = st.text_input("AIzaSy...", value=st.session_state.gemini_key, type="password", label_visibility="collapsed", placeholder="AIzaSy...")
+                st.caption("使用 Imagen 備用模型需要提供您的 Gemini API Key。")
 
     st.markdown("<br/>**圖片描述 (Prompt)**", unsafe_allow_html=True)
     prompt_input = st.text_area(
@@ -203,10 +209,10 @@ with st.container(border=True):
         else:
             # Fallback secrets retrieval
             hf_tok = st.session_state.hf_token if st.session_state.hf_token else ""
-            gemini_key = ""
+            gemini_key = st.session_state.gemini_key if st.session_state.gemini_key else ""
             try:
                 if not hf_tok: hf_tok = st.secrets.get("HF_TOKEN", "")
-                gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+                if not gemini_key: gemini_key = st.secrets.get("GEMINI_API_KEY", "")
             except:
                 pass
 
