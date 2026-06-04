@@ -106,16 +106,21 @@ def generate_cosmos3(prompt: str, hf_tok: str):
         json_data=payload,
     )
     
-    if not resp or not resp.ok:
+    if resp is None or not resp.ok:
         err = {}
-        try:
-            err = resp.json()
-        except Exception:
-            pass
-        if "is currently loading" in err.get("error", ""):
+        status = resp.status_code if resp is not None else "N/A"
+        if resp is not None:
+            try:
+                err = resp.json()
+            except Exception:
+                err = {"error": resp.text}
+        
+        if isinstance(err, dict) and "is currently loading" in str(err.get("error", "")):
             time_est = err.get("estimated_time", "?")
             raise Exception(f"模型正在載入中，預計需要 {time_est} 秒。請稍後再試或切換至備用模型。")
-        raise Exception(err.get("error", f"HF API error ({resp.status_code if resp else 'N/A'})."))
+            
+        error_msg = err.get("error", err) if isinstance(err, dict) else err
+        raise Exception(f"HF API error ({status}): {error_msg}")
     
     img = Image.open(BytesIO(resp.content))
     return img
@@ -127,8 +132,16 @@ def generate_imagen(prompt: str, api_key: str):
         "parameters": {"sampleCount": 1},
     }
     resp = fetch_with_retry(endpoint, headers={"Content-Type": "application/json"}, json_data=payload)
-    if not resp or not resp.ok:
-        raise Exception(f"Imagen API error: {resp.status_code if resp else 'no response'}")
+    if resp is None or not resp.ok:
+        status = resp.status_code if resp is not None else "N/A"
+        err_msg = ""
+        if resp is not None:
+            try:
+                err_json = resp.json()
+                err_msg = err_json.get('error', {}).get('message', resp.text)
+            except:
+                err_msg = resp.text
+        raise Exception(f"Imagen API error ({status}): {err_msg}")
     data = resp.json()
     b64 = data.get("predictions", [{}])[0].get("bytesBase64Encoded", "")
     if not b64:
