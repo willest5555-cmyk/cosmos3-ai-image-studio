@@ -54,6 +54,22 @@ body {
 .badge-blue  { background: rgba(37,99,235,0.1);  color: #2563eb; border: 1px solid rgba(37,99,235,0.2); }
 .badge-amber { background: rgba(217,119,6,0.1);  color: #d97706; border: 1px solid rgba(217,119,6,0.2); }
 
+/* Enhance Prompt Text Area */
+.stTextArea textarea {
+    background-color: #eff6ff !important;
+    border: 2px solid #93c5fd !important;
+    border-radius: 0.75rem !important;
+    font-size: 1.05rem !important;
+    color: #1e3a8a !important;
+    padding: 1rem !important;
+    transition: all 0.3s ease;
+}
+.stTextArea textarea:focus {
+    background-color: #ffffff !important;
+    border-color: #2563eb !important;
+    box-shadow: 0 0 0 4px rgba(37,99,235,0.2) !important;
+}
+
 /* Hide streamlit branding */
 #MainMenu, footer, header {visibility: hidden;}
 </style>
