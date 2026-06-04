@@ -126,7 +126,7 @@ def generate_cosmos3(prompt: str, hf_tok: str):
     return img
 
 def generate_imagen(prompt: str, api_key: str):
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={api_key}"
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
     payload = {
         "instances": {"prompt": prompt},
         "parameters": {"sampleCount": 1},
