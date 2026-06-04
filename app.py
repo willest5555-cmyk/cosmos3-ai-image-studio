@@ -3,23 +3,27 @@ import requests
 import base64
 import time
 import random
+import urllib.parse
 from PIL import Image
 from io import BytesIO
 
 st.set_page_config(
     page_title="AI 圖像生成器",
-    page_icon="🖼️",
+    page_icon="🎨",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
 <style>
-/* Light Theme CSS */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif !important;
+}
 body {
     background-color: #f9fafb !important;
     color: #1f2937 !important;
-    font-family: 'Inter', sans-serif !important;
 }
 .stApp {
     background-color: #f9fafb !important;
@@ -30,46 +34,39 @@ body {
     margin-top: 1rem;
 }
 .main-header h1 {
-    font-size: 1.875rem;
+    font-size: 2rem;
     font-weight: 700;
     color: #111827;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.4rem;
 }
 .main-header p {
     color: #6b7280;
+    font-size: 0.95rem;
 }
-div.stButton > button:first-child {
-    border-radius: 1rem;
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.65rem;
     font-weight: 600;
-    padding: 0.75rem 1rem;
+    margin: 0 2px;
 }
-.primary-btn > div > div > button:first-child {
-    background-color: #2563eb !important;
-    color: white !important;
-    border: none;
-}
-.primary-btn > div > div > button:first-child:hover {
-    background-color: #1d4ed8 !important;
-}
-.primary-btn-purple > div > div > button:first-child {
-    background-color: #9333ea !important;
-    color: white !important;
-    border: none;
-}
-.primary-btn-purple > div > div > button:first-child:hover {
-    background-color: #7e22ce !important;
-}
+.badge-green { background: rgba(22,163,74,0.1); color: #16a34a; border: 1px solid rgba(22,163,74,0.2); }
+.badge-blue  { background: rgba(37,99,235,0.1);  color: #2563eb; border: 1px solid rgba(37,99,235,0.2); }
+.badge-amber { background: rgba(217,119,6,0.1);  color: #d97706; border: 1px solid rgba(217,119,6,0.2); }
+
 /* Hide streamlit branding */
 #MainMenu, footer, header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# Helper Functions
-def fetch_with_retry(url, method="POST", headers=None, json_data=None, max_retries=5):
-    delay = 1.0
+# ── Helper Functions ──────────────────────────────────────────────────────────
+
+def fetch_with_retry(url, method="POST", headers=None, json_data=None, max_retries=4, timeout=120):
+    delay = 1.5
     for i in range(max_retries):
         try:
-            resp = requests.request(method, url, headers=headers, json=json_data, timeout=120)
+            resp = requests.request(method, url, headers=headers, json=json_data, timeout=timeout)
             if resp.status_code in (429,) or resp.status_code >= 500:
                 if i == max_retries - 1:
                     raise Exception(f"Server busy (HTTP {resp.status_code})")
@@ -77,6 +74,11 @@ def fetch_with_retry(url, method="POST", headers=None, json_data=None, max_retri
                 delay *= 2
                 continue
             return resp
+        except requests.exceptions.Timeout:
+            if i == max_retries - 1:
+                raise Exception("連線逾時 (Timeout)，請稍後再試。")
+            time.sleep(delay)
+            delay *= 2
         except requests.exceptions.RequestException as e:
             if i == max_retries - 1:
                 raise
@@ -84,11 +86,25 @@ def fetch_with_retry(url, method="POST", headers=None, json_data=None, max_retri
             delay *= 2
     return None
 
+
+def generate_pollinations(prompt: str, width: int = 1024, height: int = 1024):
+    """完全免費，不需要 API Key，使用 FLUX 模型。"""
+    encoded = urllib.parse.quote(prompt)
+    seed = random.randint(0, 99999)
+    url = (f"https://image.pollinations.ai/prompt/{encoded}"
+           f"?width={width}&height={height}&seed={seed}&nologo=true&enhance=false")
+    resp = requests.get(url, timeout=120)
+    if not resp.ok:
+        raise Exception(f"Pollinations API error ({resp.status_code}): {resp.text[:200]}")
+    img = Image.open(BytesIO(resp.content))
+    return img
+
+
 def generate_cosmos3(prompt: str, hf_tok: str):
     payload = {
         "inputs": prompt,
         "parameters": {
-            "negative_prompt": "blurry, low quality, distorted, bad physics, text, watermark",
+            "negative_prompt": "blurry, low quality, distorted, text, watermark",
             "guidance_scale": 7.0,
             "num_inference_steps": 25,
             "width": 1024,
@@ -99,38 +115,28 @@ def generate_cosmos3(prompt: str, hf_tok: str):
     headers = {"Content-Type": "application/json"}
     if hf_tok:
         headers["Authorization"] = f"Bearer {hf_tok.strip()}"
-        
     resp = fetch_with_retry(
         "https://api-inference.huggingface.co/models/nvidia/Cosmos3-Super-Text2Image",
-        headers=headers,
-        json_data=payload,
+        headers=headers, json_data=payload,
     )
-    
     if resp is None or not resp.ok:
         err = {}
         status = resp.status_code if resp is not None else "N/A"
         if resp is not None:
-            try:
-                err = resp.json()
-            except Exception:
-                err = {"error": resp.text}
-        
+            try: err = resp.json()
+            except: err = {"error": resp.text}
         if isinstance(err, dict) and "is currently loading" in str(err.get("error", "")):
-            time_est = err.get("estimated_time", "?")
-            raise Exception(f"模型正在載入中，預計需要 {time_est} 秒。請稍後再試或切換至備用模型。")
-            
+            t = err.get("estimated_time", "?")
+            raise Exception(f"模型正在載入中 (~{t} 秒)，請稍後再試。")
         error_msg = err.get("error", err) if isinstance(err, dict) else err
         raise Exception(f"HF API error ({status}): {error_msg}")
-    
-    img = Image.open(BytesIO(resp.content))
-    return img
+    return Image.open(BytesIO(resp.content))
+
 
 def generate_imagen(prompt: str, api_key: str):
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key={api_key}"
-    payload = {
-        "instances": {"prompt": prompt},
-        "parameters": {"sampleCount": 1},
-    }
+    endpoint = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"imagen-4.0-generate-001:predict?key={api_key}")
+    payload = {"instances": {"prompt": prompt}, "parameters": {"sampleCount": 1}}
     resp = fetch_with_retry(endpoint, headers={"Content-Type": "application/json"}, json_data=payload)
     if resp is None or not resp.ok:
         status = resp.status_code if resp is not None else "N/A"
@@ -138,126 +144,194 @@ def generate_imagen(prompt: str, api_key: str):
         if resp is not None:
             try:
                 err_json = resp.json()
-                err_msg = err_json.get('error', {}).get('message', resp.text)
-            except:
-                err_msg = resp.text
+                err_msg = err_json.get("error", {}).get("message", resp.text)
+            except: err_msg = resp.text
         raise Exception(f"Imagen API error ({status}): {err_msg}")
     data = resp.json()
     b64 = data.get("predictions", [{}])[0].get("bytesBase64Encoded", "")
     if not b64:
         raise Exception("No image data returned from Imagen 4.0")
-    img = Image.open(BytesIO(base64.b64decode(b64)))
-    return img
+    return Image.open(BytesIO(base64.b64decode(b64)))
 
-# Initialize session state
-if "model" not in st.session_state:
-    st.session_state.model = "huggingface"
-if "hf_token" not in st.session_state:
-    st.session_state.hf_token = ""
-if "gemini_key" not in st.session_state:
-    st.session_state.gemini_key = ""
-if "prompt" not in st.session_state:
-    st.session_state.prompt = ""
-if "generated_img" not in st.session_state:
-    st.session_state.generated_img = None
-if "show_settings" not in st.session_state:
-    st.session_state.show_settings = False
 
-# Layout
+# ── Session State ─────────────────────────────────────────────────────────────
+
+for k, v in {
+    "model": "pollinations",
+    "hf_token": "",
+    "gemini_key": "",
+    "prompt": "",
+    "generated_img": None,
+    "show_settings": False,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── Layout ────────────────────────────────────────────────────────────────────
+
 st.markdown("""
 <div class="main-header">
-    <div style="display:inline-block; padding: 0.75rem; background-color: #2563eb; border-radius: 1rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); margin-bottom: 1rem;">
-        <span style="font-size:2rem; color: white;">🖼️</span>
+    <div style="display:inline-block;padding:0.85rem;background:linear-gradient(135deg,#2563eb,#7c3aed);
+                border-radius:1.2rem;box-shadow:0 10px 30px rgba(37,99,235,0.25);margin-bottom:1rem;">
+        <span style="font-size:2rem;">🎨</span>
     </div>
     <h1>AI 圖像生成器</h1>
-    <p>輸入您的想像，讓 AI 為您繪製成真</p>
+    <p>輸入文字描述，讓 AI 為您即時繪製圖像</p>
 </div>
 """, unsafe_allow_html=True)
 
+# ── Model Selection ───────────────────────────────────────────────────────────
 with st.container(border=True):
-    st.markdown("**選擇 AI 模型**")
-    
-    col1, col2, col3, col_empty = st.columns([1.5, 1.5, 0.5, 2])
-    with col1:
-        if st.button("Cosmos3 (Hugging Face)", use_container_width=True, type="primary" if st.session_state.model == "huggingface" else "secondary"):
-            st.session_state.model = "huggingface"
-            st.rerun()
-    with col2:
-        if st.button("✨ Imagen (備用模型)", use_container_width=True, type="primary" if st.session_state.model == "gemini" else "secondary"):
-            st.session_state.model = "gemini"
-            st.rerun()
-    with col3:
-        if st.button("⚙️", help="設定 API Key"):
-            st.session_state.show_settings = not st.session_state.show_settings
-            st.rerun()
 
-    if st.session_state.show_settings:
+    st.markdown("##### 🤖 選擇生成引擎")
+
+    col_a, col_b, col_c, col_gear = st.columns([1.6, 1.6, 1.4, 0.45])
+    with col_a:
+        if st.button(
+            "🆓 FLUX (免費)",
+            use_container_width=True,
+            type="primary" if st.session_state.model == "pollinations" else "secondary"
+        ):
+            st.session_state.model = "pollinations"
+            st.session_state.show_settings = False
+            st.rerun()
+    with col_b:
+        if st.button(
+            "🖥️ Cosmos 3 (HF)",
+            use_container_width=True,
+            type="primary" if st.session_state.model == "huggingface" else "secondary"
+        ):
+            st.session_state.model = "huggingface"
+            st.session_state.show_settings = False
+            st.rerun()
+    with col_c:
+        if st.button(
+            "✨ Imagen 4.0",
+            use_container_width=True,
+            type="primary" if st.session_state.model == "gemini" else "secondary"
+        ):
+            st.session_state.model = "gemini"
+            st.session_state.show_settings = False
+            st.rerun()
+    with col_gear:
+        if st.session_state.model != "pollinations":
+            if st.button("⚙️", help="設定 API Key", use_container_width=True):
+                st.session_state.show_settings = not st.session_state.show_settings
+                st.rerun()
+
+    # Model info badges
+    if st.session_state.model == "pollinations":
+        st.markdown(
+            '<span class="badge badge-green">✓ 完全免費</span>'
+            '<span class="badge badge-green">✓ 無需 API Key</span>'
+            '<span class="badge badge-blue">FLUX 模型</span>',
+            unsafe_allow_html=True
+        )
+    elif st.session_state.model == "huggingface":
+        st.markdown(
+            '<span class="badge badge-amber">需要 HF Token</span>'
+            '<span class="badge badge-blue">NVIDIA Cosmos 3 Super 64B</span>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            '<span class="badge badge-amber">需要 Gemini API Key (付費帳號)</span>'
+            '<span class="badge badge-blue">Google Imagen 4.0</span>',
+            unsafe_allow_html=True
+        )
+
+    # API Key Settings Panel
+    if st.session_state.show_settings and st.session_state.model != "pollinations":
         with st.container(border=True):
             if st.session_state.model == "huggingface":
                 st.markdown("**Hugging Face Access Token (選填)**")
-                st.session_state.hf_token = st.text_input("hf_...", value=st.session_state.hf_token, type="password", label_visibility="collapsed", placeholder="hf_...")
-                st.caption("某些大型模型或高頻率請求需要提供 Token。您可以在 Hugging Face 帳號設定中產生。")
+                st.session_state.hf_token = st.text_input(
+                    "hf_token", value=st.session_state.hf_token, type="password",
+                    label_visibility="collapsed", placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxx"
+                )
+                st.caption("從 huggingface.co/settings/tokens 取得 Read Token。")
             else:
-                st.markdown("**Gemini API Key (必填)**")
-                st.session_state.gemini_key = st.text_input("AIzaSy...", value=st.session_state.gemini_key, type="password", label_visibility="collapsed", placeholder="AIzaSy...")
-                st.caption("使用 Imagen 備用模型需要提供您的 Gemini API Key。")
+                st.markdown("**Gemini API Key (必填，需付費帳號)**")
+                st.session_state.gemini_key = st.text_input(
+                    "gemini_key", value=st.session_state.gemini_key, type="password",
+                    label_visibility="collapsed", placeholder="AIzaSy..."
+                )
+                st.caption("從 aistudio.google.com 取得。Imagen 4.0 需要升級至付費方案。")
 
-    st.markdown("<br/>**圖片描述 (Prompt)**", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── Prompt Input ─────────────────────────────────────────────────────────
+    st.markdown("##### ✍️ 圖片描述 (Prompt)")
     prompt_input = st.text_area(
-        "圖片描述 (Prompt)", 
-        value=st.session_state.prompt, 
-        placeholder="例如: 一隻穿著太空衣的可愛貓咪，正在火星上漫步，高畫質，電影光影...",
+        "prompt",
+        value=st.session_state.prompt,
+        placeholder="例如: a futuristic city at sunset with flying cars, cinematic lighting, photorealistic, 8K...\n\n(建議使用英文以獲得最佳效果)",
         label_visibility="collapsed",
-        height=120
+        height=130
     )
     st.session_state.prompt = prompt_input
 
-    # Generate button wrapper
-    wrapper_class = "primary-btn-purple" if st.session_state.model == "gemini" else "primary-btn"
-    st.markdown(f'<div class="{wrapper_class}">', unsafe_allow_html=True)
+    # ── Generate Button ───────────────────────────────────────────────────────
+    btn_label = {
+        "pollinations": "🎨 免費生成 (FLUX)",
+        "huggingface":  "🖥️ 生成 Cosmos 3 影像",
+        "gemini":       "✨ 生成 Imagen 4.0 影像",
+    }[st.session_state.model]
 
-    if st.button("✨ 開始生成", use_container_width=True):
+    if st.button(btn_label, use_container_width=True, type="primary"):
         if not prompt_input.strip():
             st.error("請先輸入圖片描述 (Prompt)！")
         else:
-            # Fallback secrets retrieval
-            hf_tok = st.session_state.hf_token if st.session_state.hf_token else ""
-            gemini_key = st.session_state.gemini_key if st.session_state.gemini_key else ""
+            # Resolve API keys (UI input → secrets fallback)
+            hf_tok = st.session_state.hf_token
+            gemini_key = st.session_state.gemini_key
             try:
-                if not hf_tok: hf_tok = st.secrets.get("HF_TOKEN", "")
+                if not hf_tok:     hf_tok = st.secrets.get("HF_TOKEN", "")
                 if not gemini_key: gemini_key = st.secrets.get("GEMINI_API_KEY", "")
-            except:
-                pass
+            except: pass
 
             if st.session_state.model == "gemini" and not gemini_key:
-                st.error("系統未配置 Gemini API Key，請檢查環境變數 (secrets)。")
+                st.error("請先點擊 ⚙️ 設定您的 Gemini API Key。")
             else:
-                with st.spinner("正在生成圖片..."):
+                spinner_msg = {
+                    "pollinations": "🎨 FLUX 模型生成中 (免費 · 約 10~30 秒)...",
+                    "huggingface":  "🖥️ Cosmos 3 生成中 (約 30~60 秒)...",
+                    "gemini":       "✨ Imagen 4.0 生成中...",
+                }[st.session_state.model]
+
+                with st.spinner(spinner_msg):
                     try:
-                        if st.session_state.model == "huggingface":
+                        if st.session_state.model == "pollinations":
+                            img = generate_pollinations(prompt_input)
+                        elif st.session_state.model == "huggingface":
                             img = generate_cosmos3(prompt_input, hf_tok)
                         else:
                             img = generate_imagen(prompt_input, gemini_key)
-                        
                         st.session_state.generated_img = img
+                        st.success("✅ 圖片生成成功！")
                     except Exception as e:
-                        st.error(f"發生錯誤: {e}")
+                        st.error(f"❌ 發生錯誤: {e}")
                         if st.session_state.model == "huggingface":
-                            st.info("💡 建議：如果 Hugging Face 模型沒有回應或發生權限錯誤，您可以點擊上方的「Imagen (備用模型)」來切換至 Google 的圖像生成服務。")
+                            st.info("💡 建議：可以切換為左邊的「🆓 FLUX (免費)」模型立刻免費生成，完全不需要 API Key！")
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
+# ── Result ────────────────────────────────────────────────────────────────────
 if st.session_state.generated_img:
     with st.container(border=True):
         st.image(st.session_state.generated_img, use_container_width=True)
-        
+
         buf = BytesIO()
         st.session_state.generated_img.save(buf, format="PNG")
-        
-        st.download_button(
-            label="⬇️ 下載圖片",
-            data=buf.getvalue(),
-            file_name=f"generated-image-{int(time.time()*1000)}.png",
-            mime="image/png",
-            use_container_width=True
-        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button(
+                label="⬇️ 下載圖片 (PNG)",
+                data=buf.getvalue(),
+                file_name=f"ai-image-{int(time.time())}.png",
+                mime="image/png",
+                use_container_width=True
+            )
+        with c2:
+            if st.button("🗑️ 清除圖片", use_container_width=True):
+                st.session_state.generated_img = None
+                st.rerun()
