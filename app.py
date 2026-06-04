@@ -3,7 +3,6 @@ import requests
 import base64
 import time
 import random
-import urllib.parse
 from PIL import Image
 from io import BytesIO
 
@@ -87,17 +86,34 @@ def fetch_with_retry(url, method="POST", headers=None, json_data=None, max_retri
     return None
 
 
-def generate_pollinations(prompt: str, width: int = 1024, height: int = 1024):
-    """完全免費，不需要 API Key，使用 FLUX 模型。"""
-    encoded = urllib.parse.quote(prompt)
-    seed = random.randint(0, 99999)
-    url = (f"https://image.pollinations.ai/prompt/{encoded}"
-           f"?width={width}&height={height}&seed={seed}&nologo=true&enhance=false")
-    resp = requests.get(url, timeout=120)
-    if not resp.ok:
-        raise Exception(f"Pollinations API error ({resp.status_code}): {resp.text[:200]}")
-    img = Image.open(BytesIO(resp.content))
-    return img
+def generate_flux_schnell(prompt: str, hf_tok: str):
+    """使用 HF Inference API 呼叫 FLUX.1-schnell，速度最快的 FLUX 模型。"""
+    url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+    headers = {"Content-Type": "application/json"}
+    if hf_tok:
+        headers["Authorization"] = f"Bearer {hf_tok.strip()}"
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "num_inference_steps": 4,
+            "guidance_scale": 0.0,
+            "width": 1024,
+            "height": 1024,
+        }
+    }
+    resp = fetch_with_retry(url, headers=headers, json_data=payload)
+    if resp is None or not resp.ok:
+        err = {}
+        status = resp.status_code if resp is not None else "N/A"
+        if resp is not None:
+            try: err = resp.json()
+            except: err = {"error": resp.text}
+        if isinstance(err, dict) and "is currently loading" in str(err.get("error", "")):
+            t = err.get("estimated_time", "?")
+            raise Exception(f"模型正在載入中 (~{t} 秒)，請稍後再試。")
+        error_msg = err.get("error", err) if isinstance(err, dict) else err
+        raise Exception(f"FLUX API error ({status}): {error_msg}")
+    return Image.open(BytesIO(resp.content))
 
 
 def generate_cosmos3(prompt: str, hf_tok: str):
@@ -157,7 +173,7 @@ def generate_imagen(prompt: str, api_key: str):
 # ── Session State ─────────────────────────────────────────────────────────────
 
 for k, v in {
-    "model": "pollinations",
+    "model": "flux",
     "hf_token": "",
     "gemini_key": "",
     "prompt": "",
@@ -188,11 +204,11 @@ with st.container(border=True):
     col_a, col_b, col_c, col_gear = st.columns([1.6, 1.6, 1.4, 0.45])
     with col_a:
         if st.button(
-            "🆓 FLUX (免費)",
+            "⚡ FLUX.1-schnell",
             use_container_width=True,
-            type="primary" if st.session_state.model == "pollinations" else "secondary"
+            type="primary" if st.session_state.model == "flux" else "secondary"
         ):
-            st.session_state.model = "pollinations"
+            st.session_state.model = "flux"
             st.session_state.show_settings = False
             st.rerun()
     with col_b:
@@ -214,17 +230,16 @@ with st.container(border=True):
             st.session_state.show_settings = False
             st.rerun()
     with col_gear:
-        if st.session_state.model != "pollinations":
-            if st.button("⚙️", help="設定 API Key", use_container_width=True):
-                st.session_state.show_settings = not st.session_state.show_settings
-                st.rerun()
+        if st.button("⚙️", help="設定 API Key", use_container_width=True):
+            st.session_state.show_settings = not st.session_state.show_settings
+            st.rerun()
 
     # Model info badges
-    if st.session_state.model == "pollinations":
+    if st.session_state.model == "flux":
         st.markdown(
-            '<span class="badge badge-green">✓ 完全免費</span>'
-            '<span class="badge badge-green">✓ 無需 API Key</span>'
-            '<span class="badge badge-blue">FLUX 模型</span>',
+            '<span class="badge badge-blue">FLUX.1-schnell</span>'
+            '<span class="badge badge-green">最快 4 步生成</span>'
+            '<span class="badge badge-amber">建議提供 HF Token</span>',
             unsafe_allow_html=True
         )
     elif st.session_state.model == "huggingface":
@@ -241,16 +256,16 @@ with st.container(border=True):
         )
 
     # API Key Settings Panel
-    if st.session_state.show_settings and st.session_state.model != "pollinations":
+    if st.session_state.show_settings:
         with st.container(border=True):
-            if st.session_state.model == "huggingface":
-                st.markdown("**Hugging Face Access Token (選填)**")
+            if st.session_state.model in ("flux", "huggingface"):
+                st.markdown("**Hugging Face Access Token**")
                 st.session_state.hf_token = st.text_input(
                     "hf_token", value=st.session_state.hf_token, type="password",
                     label_visibility="collapsed", placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxx"
                 )
-                st.caption("從 huggingface.co/settings/tokens 取得 Read Token。")
-            else:
+                st.caption("從 huggingface.co/settings/tokens 取得 Read Token。FLUX 與 Cosmos 3 皆需此 Token。")
+            elif st.session_state.model == "gemini":
                 st.markdown("**Gemini API Key (必填，需付費帳號)**")
                 st.session_state.gemini_key = st.text_input(
                     "gemini_key", value=st.session_state.gemini_key, type="password",
@@ -273,9 +288,9 @@ with st.container(border=True):
 
     # ── Generate Button ───────────────────────────────────────────────────────
     btn_label = {
-        "pollinations": "🎨 免費生成 (FLUX)",
-        "huggingface":  "🖥️ 生成 Cosmos 3 影像",
-        "gemini":       "✨ 生成 Imagen 4.0 影像",
+        "flux":        "⚡ 生成圖片 (FLUX.1-schnell)",
+        "huggingface": "🖥️ 生成 Cosmos 3 影像",
+        "gemini":      "✨ 生成 Imagen 4.0 影像",
     }[st.session_state.model]
 
     if st.button(btn_label, use_container_width=True, type="primary"):
@@ -292,17 +307,20 @@ with st.container(border=True):
 
             if st.session_state.model == "gemini" and not gemini_key:
                 st.error("請先點擊 ⚙️ 設定您的 Gemini API Key。")
-            else:
-                spinner_msg = {
-                    "pollinations": "🎨 FLUX 模型生成中 (免費 · 約 10~30 秒)...",
-                    "huggingface":  "🖥️ Cosmos 3 生成中 (約 30~60 秒)...",
-                    "gemini":       "✨ Imagen 4.0 生成中...",
-                }[st.session_state.model]
+            elif st.session_state.model in ("flux", "huggingface") and not hf_tok:
+                st.warning("⚠️ 未設定 HF Token，將以匿名方式呼叫 API（可能有速率限制）。如遇錯誤請點 ⚙️ 設定 Token。")
 
+            spinner_msg = {
+                "flux":        "⚡ FLUX.1-schnell 生成中 (約 10~20 秒)...",
+                "huggingface": "🖥️ Cosmos 3 生成中 (約 30~60 秒)...",
+                "gemini":      "✨ Imagen 4.0 生成中...",
+            }[st.session_state.model]
+
+            if st.session_state.model != "gemini" or gemini_key:
                 with st.spinner(spinner_msg):
                     try:
-                        if st.session_state.model == "pollinations":
-                            img = generate_pollinations(prompt_input)
+                        if st.session_state.model == "flux":
+                            img = generate_flux_schnell(prompt_input, hf_tok)
                         elif st.session_state.model == "huggingface":
                             img = generate_cosmos3(prompt_input, hf_tok)
                         else:
@@ -311,8 +329,7 @@ with st.container(border=True):
                         st.success("✅ 圖片生成成功！")
                     except Exception as e:
                         st.error(f"❌ 發生錯誤: {e}")
-                        if st.session_state.model == "huggingface":
-                            st.info("💡 建議：可以切換為左邊的「🆓 FLUX (免費)」模型立刻免費生成，完全不需要 API Key！")
+                        st.info("💡 請點擊 ⚙️ 設定您的 Hugging Face Token 後重試。")
 
 # ── Result ────────────────────────────────────────────────────────────────────
 if st.session_state.generated_img:
